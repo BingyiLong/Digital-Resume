@@ -1,0 +1,491 @@
+---
+title: "student performance final project"
+date: "Dec 14 2022"
+author: "Bingyi Long/193000028"
+output: html_notebook
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+On my honor, I have neither received nor given any unauthorized
+assistance on this homework. \* SIGNED: [Bingyi Long]
+
+Data Set Info:
+
+This data approach student achievement in secondary education of two
+Portuguese schools. The data attributes include student grades,
+demographic, social and school related features) and it was collected by
+using school reports and questionnaires. Two datasets are provided
+regarding the performance in two distinct subjects: Mathematics (mat)
+and Portuguese language (por).
+
+citation:
+
+P. Cortez and A. Silva. Using Data Mining to Predict Secondary School
+Student Performance. In A. Brito and J. Teixeira Eds., Proceedings of
+5th FUture BUsiness TEChnology Conference (FUBUTEC 2008) pp. 5-12,
+Porto, Portugal, April, 2008, EUROSIS, ISBN 978-9077381-39-7.
+
+web link:
+
+<https://archive.ics.uci.edu/ml/datasets/Student+Performance>
+
+```{r setup, results=F, message=FALSE, error=FALSE, warning=FALSE}
+library(ggplot2)
+library(rstanarm)
+library(bayesplot)
+library(bayesrules)
+library(tidyverse)
+library(tidybayes)
+library(broom.mixed)
+```
+
+```{r import data}
+
+library(readr)
+student_mat <- read_delim("student_mat.csv", 
+    delim = ";", escape_double = FALSE, col_types = cols(address = col_skip()), 
+    trim_ws = TRUE)
+
+student_por <- read_delim("student_por.csv", 
+    delim = ";", escape_double = FALSE, col_types = cols(address = col_skip()), 
+    trim_ws = TRUE)
+
+
+student_mat
+student_por
+
+```
+
+```{r combine data}
+student_mat<-student_mat %>%
+  mutate(class="math")
+
+student_por<-student_por %>%
+  mutate(class="portuguese")
+
+student_total <- rbind(student_mat, student_por) 
+
+student_total
+
+```
+
+```{r select}
+student<-student_total %>% 
+  select(G1, G2, G3, school, class, absences, studytime, Walc, Medu, Fedu) 
+
+student
+```
+Prior Predictive Checks:
+
+```{r plot}
+
+ggplot(student, aes(y = G3, x = absences , 
+                       color = school)) + geom_point()
+
+ggplot(student, aes(y = G3, x = G2 , 
+                       color = studytime)) + geom_point()
+
+
+ggplot(student, aes(y = G3, x = G2 , 
+                       color = class)) + geom_point()
+
+```
+
+```{r plot2}
+ggplot(student, aes( y = G3)) + 
+  geom_boxplot()
+
+ggplot(student, aes(x = class, y = G3)) + 
+  geom_boxplot()
+
+ggplot(student, aes(x = school, y = G3)) + 
+  geom_boxplot()
+
+```
+
+First Model: simulate a posterior Normal regression model of `G3` by
+`G1` and `G2` 
+  G3: final year grade
+  G1: 1st period grade
+  G2: 2nd period grade.
+
+use the average G3 is around 10-14 for "prior_intercept"
+
+use the finding in a research paper "Student Ability Best Predicts Final
+Grade in a College Algebra Course," which explored that indicators of
+students' past performance and experience, including grade-point-average
+and the number of accumulated credit hours, best predict student success
+in this course for "prior"
+Thus. prior for G2+G1 should be strong positive relationship.
+
+citation: O'Connell, K.A. et al. (2018) "Student ability best predicts
+final grade in a college algebra course," Journal of Learning Analytics,
+5(3). Available at: <https://doi.org/10.18608/jla.2018.53.11>.
+
+```{r mcmc1}
+student_m1 <- stan_glm(
+  G3 ~ G1+G2,
+  data= student, family = gaussian,
+  prior_intercept = normal(12, 1),
+  prior = normal(2,1),
+  prior_aux = exponential(1, autoscale = TRUE),
+  chains = 4, iter = 5000*2, seed = 84735)
+```
+```{r}
+prior_summary(student_m1) 
+```
+
+
+
+```{r}
+mcmc_trace(student_m1, size = 0.5) 
+
+mcmc_dens_overlay(student_m1)
+
+mcmc_acf(student_m1)
+
+neff_ratio(student_m1)
+rhat(student_m1)
+```
+
+In visual examinations, trace-plots demonstrate randomness and seem like
+white noise,
+
+parallel density plots have identical shape similar to each other,
+
+and autocorrelation plot shows autocorrelation drops off quickly and is
+effectively 0 by Log10, so markov chain mixes quickly and mimics an
+independent sample.
+
+In numerical examinations, all parameters' R hat is close to 1, and it
+means chains perform almost the same and the result is reliable and
+appear repeatedly, and neff-ratio shows all parameters' effective sample
+size ratios are all above 50%, which is good sign.
+
+
+
+
+
+```{r}
+tidy(student_m1, effects = c("fixed", "aux"),
+     conf.int = TRUE, conf.level = 0.95) 
+```
+
+in the first regression model: Y=B0+B1X1+B2X2 G3= B0 + B1 G1 + B2 G2
+
+Parameters Interpretation:
+
+B1: first period grade coefficient, has a typical value of 0.135 and a
+95% CI (0.072, 0.197) when G1 increases 1, G3 increases 0.135 on
+average.
+
+B2: second period grade coefficient, has a typical value of 0.967 and a
+95% CI (0.91, 1.023) when G2 increases 1, G3 increases 0.967 on average.
+
+Because none of the CI include 0, these terms are significantly related to G3's prediction. 
+
+```{r posterior predictive model}
+set.seed(84735)
+
+student_prediction <- posterior_predict(
+  student_m1, 
+  newdata = data.frame(G1=10, G2=15))
+
+mcmc_areas(student_prediction) +   xlab("final grade G3") 
+
+```
+
+the posterior predictive model suggests for a student with G1=10, G2=15,
+their G3 is typically around 15.
+
+
+
+Second Model: 
+
+simulate a posterior Normal regression model of `G3` by
+`G1` and `G2` with an interaction term between these two variables 
+Because the second term grade is likely to depend on the first term grade. 
+
+G3:final year grade
+G1: 1st period grade
+G2: 2nd period grade.
+
+use the same prior as first Model.
+
+```{r}
+student_interact <- stan_glm(
+  G3 ~ G1+G2+G1:G2,
+  data =  student, family = gaussian,
+  prior_intercept = normal(12,1),
+  prior = normal(2,1),
+  prior_aux = exponential(1, autoscale = TRUE),
+  chains = 4, iter = 5000*2,
+  seed = 84735)
+```
+
+```{r}
+mcmc_trace(student_interact, size = 0.5) 
+
+mcmc_dens_overlay(student_interact)
+
+mcmc_acf(student_interact)
+
+neff_ratio(student_interact)
+rhat(student_interact)
+```
+
+Similar analysis as before. In short, trace-plots demonstrate
+randomness, parallel density plots have identical shape, autocorrelation
+plot tells markov chain mimics an independent sample.
+
+all parameters' R hat is close to 1, and neff-ratios are all above 35%,
+which is good.
+
+```{r}
+tidy(student_interact, effects = c("fixed", "aux"))
+```
+
+the tidy shows that coefficient of interaction-the relationship between
+G1 and G2 has a typical value -0.017 and within 2 se:
+-0.017+-(2\*0.004)=(-0.025, -0.009), there is enough evidence that
+coefficient of interaction does not equal to 0, but it's also a weak
+coefficient. The interaction term is still regarded useful, but it will
+be compared with other models later.
+
+```{r warning=F}
+student %>% 
+  add_fitted_draws(student_interact, n = 50) %>%
+  ggplot(aes(x = G2, y = G3, color = G1)) +
+  geom_line(aes(y=.value, group=paste(G1, .draw))) +
+  geom_point(data = student, size = 0.1)
+```
+
+
+
+
+```{r posterior predictive model2}
+set.seed(84735)
+
+student_prediction <- posterior_predict(
+  student_interact, 
+  newdata = data.frame(G1=10, G2=15))
+
+mcmc_areas(student_prediction) +   xlab("final grade G3") 
+
+```
+the posterior predictive model suggests for a student with G1=10, G2=15,
+their G3 is typically around 15.
+
+
+
+Third Model: simulate a posterior Normal regression model of `G3` by
+other variables 'Medu','Fedu', 'absenses', 'Walc', 'studytime'
+
+G3=B0+B1*Medu + B2*Fedu+ B3*absenses + B4*Walc+ B5\*studytime
+
+  Medu - mother's education (numeric: 0 - none, 1 - primary education (4th
+grade), 2 - 5th to 9th grade, 3 - secondary education or 4 - higher
+education) 
+  Fedu - father's education (numeric: 0 - none, 1 - primary
+education (4th grade), 2 - 5th to 9th grade, 3 - secondary education or
+4 - higher education) 
+  absenses - number of school absences (numeric:
+from 0 to 93) 
+  Walc - weekend alcohol consumption (numeric: from 1 - very
+low to 5 - very high) 
+  studytime - weekly study time (numeric: 1 - \<2
+hours, 2 - 2 to 5 hours, 3 - 5 to 10 hours, or 4 - \>10 hours)
+
+use the average G3 is around 10-14 for "prior_intercept"
+
+For "Prior":
+
+use the finding in a research paper "Parenting Styles: The Impact on
+Student Achievement" which presents that Evidence was found to support
+the notion that parental education can have an indirect impact on
+children's academic achievement in various cultures
+
+In addition, the research paper "The association between levels of
+alcohol consumption and mental health problems and academic performance
+among young university students" discusses high levels of alcohol
+consumption are associated with poor academic performance and mental
+health outcomes among students.
+
+Thus, the prior knowledge is parents' education has a relatively strong positive influence on children's grades, and weekend alcohol consumption has a negative influence on students' grades. 
+
+citation: Brown, L. and Iyengar, S. (2008) "Parenting styles: The impact
+on student achievement," Marriage & Family Review, 43(1-2), pp. 14--38.
+Available at: <https://doi.org/10.1080/01494920802010140>.
+
+Tembo, C., Burns, S. and Kalembo, F. (2017) "The association between
+levels of alcohol consumption and mental health problems and academic
+performance among Young University Students," PLOS ONE, 12(6). Available
+at: <https://doi.org/10.1371/journal.pone.0178142>.
+
+```{r mcmc2}
+student_m2 <- stan_glm(
+  G3 ~ Medu+Fedu+absences+Walc+studytime,
+  data= student, family = gaussian,
+  prior_intercept = normal(12, 1),
+  prior = normal(5,2),
+  prior_aux = exponential(1, autoscale = TRUE),
+  chains = 4, iter = 5000*2, seed = 84735)
+```
+```{r}
+prior_summary(student_m2) 
+```
+
+```{r}
+mcmc_trace(student_m2, size = 0.5) 
+
+mcmc_dens_overlay(student_m2)
+
+mcmc_acf(student_m2)
+
+neff_ratio(student_m2)
+rhat(student_m2)
+```
+
+Similar analysis as before. In short, trace-plots demonstrate
+randomness, parallel density plots have identical shape, autocorrelation
+plot tells markov chain mimics an independent sample.
+
+all parameters' R hat is close to 1, and neff-ratios are all above 70%,
+which is a good sign.
+
+
+```{r warning=F}
+student %>% 
+  add_fitted_draws(student_m2, n = 50) %>%
+  ggplot(aes(x = Medu+ Fedu+ absences+ Walc+ studytime, y = G3)) +
+  geom_point(data = student, size = 0.1)
+```
+
+```{r}
+tidy(student_m2, effects = c("fixed", "aux"),
+     conf.int = TRUE, conf.level = 0.95) 
+```
+
+in the third regression model: G3=B0+B1*Medu + B2*Fedu+ B3*absences +
+B4*Walc+ B5\*studytime
+
+Parameters Interpretation:
+
+B1: Medu coefficient, has a typical value of 0.521 and a 95% CI (0.252,
+0.783) when Medu increases 1 level, G3 increases 0.521 on average.
+
+B2: Fedu coefficient, has a typical value of 0.228 and a 95% CI (-0.04,
+0.5) when Fedu increases 1 level, G3 increases 0.228 on average, because
+0 is contained in CI, it is not significantly useful in predicting G3.
+
+B3: absences coefficient, has a typical value of -0.023 and a 95% CI
+(-0.06, 0.015), because contains 0, it is not significnatly useful in
+predicting G3.
+
+B4: weekend alcohol use coefficient has a typical value of -0.222 and a
+95% CI (-0.407, -0.039), so when weekend alcohol use increases 1 level,
+G3 typically decreases 0.222.
+
+B5: study time coefficient has a typical value of 0.61 and a 95% CI
+(0.32, 0.89), so when study time increases 1 level, G3 typically
+increases 0.61.
+
+```{r posterior predictive model3}
+set.seed(84735)
+
+student_prediction <- posterior_predict(
+  student_m2, 
+  newdata = data.frame(Medu=4, Fedu=4, absences=3, Walc=1, studytime=5))
+
+mcmc_areas(student_prediction) +   xlab("final grade G3") 
+
+```
+the posterior predictive model suggests for a student whose parents graduate from higher education, only has 3 absences, and slightly drink alcohol, and spend a lot time studying has a typical grade of 14. 
+
+
+
+Fourth Model:
+simulate a posterior Normal regression model of `G3` by studytime based on hierarchical model of school. 
+
+```{r, results=F, cache=T}
+student_m3<- stan_glmer(
+  G3~G2 + (G2 | class),
+  data = student, family = gaussian,
+  prior_intercept = normal(12, 1),
+  prior = normal(2.5, 1), 
+  prior_aux = exponential(1, autoscale = TRUE),
+  prior_covariance = decov(reg = 1, conc = 1, 
+                           shape = 1, scale = 1),
+  chains = 4, iter = 5000*2, seed = 84735, 
+  adapt_delta = 0.999
+)
+```
+
+```{r}
+mcmc_trace(student_m3, size = 0.5) 
+
+mcmc_dens_overlay(student_m3)
+
+mcmc_acf(student_m3)
+
+neff_ratio(student_m3)
+rhat(student_m3)
+```
+
+```{r}
+tidy(student_m3, effects = c("fixed", "aux"),
+     conf.int = TRUE, conf.level = 0.95) 
+```
+
+Model Comparison:
+
+student_m1: G3\~G1, G2 student_interact: G3\~G1, G2, G1:G2 student_m2:
+G3\~Medu, Fedu, absences, Walc, studytime
+
+```{r}
+pp_check(student_m1)
+pp_check(student_interact)
+pp_check(student_m2)
+
+```
+
+The visual posterior predictive checks suggests three models are about
+the same wrong.
+
+```{r, cache=T}
+set.seed(84735)
+prediction_summary_cv(model=student_m1, data=student, k=10)
+prediction_summary_cv(model=student_interact, data=student, k=10)
+prediction_summary_cv(model=student_m2, data=student, k=10)
+```
+
+cross-validated posterior predictive summaries suggest student_interact
+model has a lower mae_scaled error and a higher within_95 coverage
+statistics, while student_m1 model has a higher within_50 coverage
+statistics.
+
+```{r}
+set.seed(84735)
+loo_1 <- loo(student_m1)
+loo_2 <- loo(student_interact)
+loo_3 <- loo(student_m2)
+
+
+c(loo_1$estimates[1], loo_2$estimates[1], loo_3$estimates[1])
+
+loo_compare(loo_1, loo_2, loo_3)
+```
+
+ELPD suggests student_interact has a higher ELPD than student_m1 and
+student_m2. However, though the ELPD for student_interact is slightly
+higher (better) than that of student_m1, it is not significantly higher.
+And ELPD difference of zero is within two standard errors of the
+estimated difference: -6.8+-2\*3.8=(-14.4, 0.8). Hence we don't have a
+strong evidence that the posterior predictive accuracy of
+student_interact is significantly superior to that of student_m1, or
+vice versa.
+
+However, we do have evidence to prove that student_interact and
+student_m1 are more accurate than student_m2.
